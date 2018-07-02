@@ -35,14 +35,16 @@ class DataSubset(object):
         if self.count is not None:
             return self.count
 
-        with open(self.parent.path + '/' + self.list_file) as f:
+        p = os.path.join(self.parent.path, self.list_file)
+        with open(p) as f:
             for i, l in enumerate(f):
                 pass
         self.count = i + 1
         return self.count
 
     def get_list_full_path(self):
-        return self.parent.path + "/" + self.list_file
+        p = os.path.join(self.parent.path, self.list_file)
+        return p
 
     def get_name(self):
         return self.parent.name + '_' + self.list_name
@@ -53,16 +55,21 @@ class DataSubset(object):
 
 class Dataset(object):
     def __init__(self, dataset_path):
-        self.path = os.path.abspath(dataset_path).rstrip('/')
+        self.path = os.path.abspath(dataset_path)
         self.name = os.path.basename(self.path)
         self.root_folder = None
 
-        config_file = self.path + "/config.py"
+        config_file = os.path.join(self.path, "config.py")
         if os.path.exists(config_file):
-            context = dict()
-            execfile(config_file, context)
-            self.__dict__.update(context['config'])
-            
+            with open(config_file) as f:
+                code = compile(f.read(), config_file, 'exec')
+                exec(code)
+            # context = dict()
+            # execfile(config_file, context)
+            # execfile(config_file)
+            # print config
+            self.__dict__.update(config)
+
         self.load_subsets()
 
     def load_subsets(self):

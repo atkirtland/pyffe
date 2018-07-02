@@ -8,7 +8,7 @@ import numpy as np
 import scipy.misc
 from google.protobuf import text_format
 
-# os.environ['GLOG_minloglevel'] = '2' # Suppress most caffe output
+os.environ['GLOG_minloglevel'] = '0' # Suppress most caffe output
 import caffe
 from caffe.proto import caffe_pb2
 
@@ -154,7 +154,7 @@ def forward_all(deploy_file, caffemodel, image_list, root_folder=None, nogpu=Fal
         if len(chunks) > 1:
             line = " ".join(chunks[0:-1])
         if root_folder is not None:
-            line = root_folder.rstrip("/") + "/" + line
+            line = os.path.join(root_folder, line)
         image_urls.append(line)
 
     for urls_chunk in [image_urls[x:x + batch_size] for x in xrange(0, len(image_urls), batch_size)]:

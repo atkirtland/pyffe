@@ -64,13 +64,13 @@ def load(path):
     if os.path.isdir(path):
         # search for pyffe file
         for filename in os.listdir(path):
-            filename = path.rstrip('/') + '/' + filename
+            filename = os.path.join(path, filename)
             if os.path.isfile(filename) and filename.endswith('.pyffe'):
                 return pickle.load(open(filename, 'rb'))
 
         # if not found, maybe is an experiments collection dir
-        return [pickle.load(open(path.rstrip('/') + '/' + filename + '/' + Experiment.EXP_FILE, 'rb')) for filename in
-                os.listdir(path) if os.path.isdir(path + '/' + filename)]
+        return [pickle.load(open(os.path.join(path, filename, Experiment.EXP_FILE, 'rb'))) for filename in os.listdir(path) if
+        os.path.isdir(os.path.join(path, filename))]
 
 
 def summarize(experiments):
@@ -100,7 +100,7 @@ class Experiment(object):
     EXP_FILE = 'exp.pyffe'
 
     # FIXME change default lists to immutable tuples ()
-    def __init__(self, pyffe_model, pyffe_solver, train, test=(), val=(), tag=None):
+    def __init__(self, caffe_path, pyffe_model, pyffe_solver, train, test=(), val=(), tag=None):
         """
         Initialize an Experiment.
         @param pyffe_model: an object of a subclass of @see pyffe.Model describing your model
@@ -120,6 +120,8 @@ class Experiment(object):
 
         self.tag = tag
         self.name = None
+
+        self.caffe_path = caffe_path
 
     def short_name(self):
         """
@@ -205,12 +207,13 @@ class Experiment(object):
     def get_last_snapshot(self):
         p = re.compile('\d+')
         snapshots = [int(p.findall(sn)[0]) for sn in
-                     glob.glob(self.workdir + '/' + self.SNAPSHOTS_DIR + '/*.caffemodel')]
+                     glob.glob(os.path.join(self.workdir, self.SNAPSHOTS_DIR, '*.caffemodel'))]
         return max(snapshots) if len(snapshots) is not 0 else None
 
     @lru_cache(maxsize=1)
     def get_log_data(self):
-        line_iter = iter(open(self.workdir + '/' + self.LOG_FILE).readline, '')
+        p = os.path.join(self.workdir, self.LOG_FILE)
+        line_iter = iter(open(p).readline, '')
         return pyffe.LogParser(line_iter).parse()
 
     @preserve_cwd
@@ -223,14 +226,15 @@ class Experiment(object):
 
         if snapshot_iter is None:
             p = re.compile('\d+')
-            snapshot_iter = str(max([int(p.findall(sn)[0]) for sn in glob.glob('snapshots/*.caffemodel')]))
+            q = os.path.join('snapshots', '*.caffemodel')
+            snapshot_iter = str(max([int(p.findall(sn)[0]) for sn in glob.glob(q)]))
 
         lmdb_name = dataset.get_name() + '_' + blobname + '@iter' + str(snapshot_iter)
 
         if not force_extract and os.path.exists(lmdb_name):
             return lmdb_name
 
-        logging.debug('Extracting \'{}\' features from {} using snapshots/snapshot_iter_{}.caffemodel'
+        logging.debug('Extracting \'{}\' features from {} using snapshots\\snapshot_iter_{}.caffemodel'
                       .format(blobname, dataset.get_name(), snapshot_iter))
 
         extract_file = 'extract-' + dataset.get_name() + '.prototxt'
@@ -240,12 +244,9 @@ class Experiment(object):
         if os.path.exists(lmdb_name):
             shutil.rmtree(lmdb_name)
 
-        os.system(
-            'caffe-extract-features snapshots/snapshot_iter_{}.caffemodel {} {} {} {} lmdb GPU 0'.format(snapshot_iter,
-                                                                                                         extract_file,
-                                                                                                         blobname,
-                                                                                                         lmdb_name,
-                                                                                                         iters))
+        iter = 'snapshot_iter_{}.caffemodel'.format(snapshot_iter)
+        caf_model = os.path.join('snapshots', iter)
+        os.system('caffe-extract-features '+caf_model+' {} {} {} {} lmdb GPU 0'.format(extract_file, blobname, lmdb_name, iters))
 
         return lmdb_name
 
@@ -281,48 +282,64 @@ class Experiment(object):
     '''
     def setup(self, experiments_dir):
         logging.info('Setting up ' + self.long_name() + ' ...')
-        self.workdir = os.path.abspath(experiments_dir.rstrip('/') + '/' + self.short_name())
+        p = os.path.join(experiments_dir, self.short_name())
+        self.workdir = os.path.abspath(p)
 
-        mkdir_p(self.workdir + '/' + self.SNAPSHOTS_DIR)
+        p = os.path.join(self.workdir, self.SNAPSHOTS_DIR)
+        mkdir_p(p)
 
         # SETUP TRAIN
-        with open(self.workdir + '/train.prototxt', 'w') as f:
+        p = os.path.join(self.workdir, 'train.prototxt')
+        with open(p, 'w') as f:
             f.write(str(self.model.to_train_prototxt(self.train)))
         self.solver.set_train('train.prototxt', self.train.get_count(), self.model.get_train_batch_size())
 
         # VAL
         for v in self.val:
             val_file = 'val-' + v.get_name() + '.prototxt'
-            with open(self.workdir + '/' + val_file, 'w') as f:
+            p = os.path.join(self.workdir, val_file)
+            with open(p, 'w') as f:
                 f.write(str(self.model.to_val_prototxt(v)))
 
             self.solver.add_val(val_file, v.get_count(), self.model.get_val_batch_size())
 
-        with open(self.workdir + '/deploy.prototxt', 'w') as f:
+        p = os.path.join(self.workdir, 'deploy.prototxt')
+        with open(p, 'w') as f:
             f.write(str(self.model.to_deploy_prototxt()))
 
-        with open(self.workdir + '/solver.prototxt', 'w') as f:
+        p = os.path.join(self.workdir, 'solver.prototxt')
+        with open(p, 'w') as f:
             f.write(self.solver.to_solver_prototxt())
 
         # WRITE OR LINK MEAN IMAGE / MEAN PIXEL / INITIAL WEIGHTS
         if self.model.infmt.mean_pixel is not None:
-            np.save(self.workdir + '/mean-pixel.npy', np.array(self.model.infmt.mean_pixel))
+            p = os.path.join(self.workdir, 'mean_pixel.npy')
+            np.save(p, np.array(self.model.infmt.mean_pixel))
 
         if self.model.pretrain is not None:
             os.system('ln -s -r ' + self.model.pretrain + ' ' + self.workdir)
 
         # DRAW NET
-        os.system('/opt/caffe/python/draw_net.py --rankdir TB {0}/train.prototxt {1}/net.png > /dev/null'
-                  .format(self.workdir, self.workdir))
+        self.draw_net('train')
 
         # DUMP EXPERIMENT OBJ
         self.save()
 
+    def draw_net(self, f):
+        # DRAW NET
+        draw = os.path.join(self.caffe_path, 'python', 'draw_net.py')
+        proto = os.path.join(self.workdir, f+'.prototxt')
+        png = os.path.join(self.workdir, 'net.png')
+        st = 'python '+draw+' --rankdir TB '+proto+' '+png+' > '+os.devnull
+        os.system(st)
+
     def setup_efficiently(self, experiments_dir):
         logging.info('Setting up ' + self.long_name() + ' ...')
-        self.workdir = os.path.abspath(experiments_dir.rstrip('/') + '/' + self.short_name())
+        P = os.path.join(experiments_dir, self.short_name())
+        self.workdir = os.path.abspath(p)
 
-        mkdir_p(self.workdir + '/' + self.SNAPSHOTS_DIR)
+        p = os.path.join(self.workdir, self.SNAPSHOTS_DIR)
+        mkdir_p(P)
 
         # COMBINED TRAIN AND VAL
         if len(self.val) != 0:
@@ -330,34 +347,37 @@ class Experiment(object):
             t_batch_size = self.model.get_train_batch_size()
             v_batch_size = self.model.get_val_batch_size()
 
-            with open(self.workdir + '/train_val.prototxt', 'w') as f:
+            p = os.path.join(self.workdir, 'train_val.prototxt')
+            with open(p, 'w') as f:
                 f.write(str(self.model.to_train_val_prototxt(self.train, self.val)))
             self.solver.set_train_val('train_val.prototxt', self.train, t_batch_size, self.val, v_batch_size)
 
             # DRAW NET
-            os.system('/opt/caffe/python/draw_net.py --rankdir TB {0}/train_val.prototxt {0}/net.png > /dev/null'
-                      .format(self.workdir))
+            self.draw_net('train_val')
 
         # TRAIN-ONLY
         else:
             # SETUP TRAIN
-            with open(self.workdir + '/train.prototxt', 'w') as f:
+            p = os.path.join(self.workdir, 'train.prototxt')
+            with open(p, 'w') as f:
                 f.write(str(self.model.to_train_prototxt(self.train)))
             self.solver.set_train('train.prototxt', self.train.get_count(), self.model.get_train_batch_size())
 
-            # DRAW NET
-            os.system('/opt/caffe/python/draw_net.py --rankdir TB {0}/train_val.prototxt {0}/net.png > /dev/null'
-                      .format(self.workdir))
+            # !!! is this a problem? should be train?
+            self.draw_net('train_val')
 
-        with open(self.workdir + '/deploy.prototxt', 'w') as f:
+        p = os.path.join(self.workdir, 'deploy.prototxt')
+        with open(p, 'w') as f:
             f.write(str(self.model.to_deploy_prototxt()))
 
-        with open(self.workdir + '/solver.prototxt', 'w') as f:
+        p = os.path.join(self.workdir, 'solver.prototxt')
+        with open(p, 'w') as f:
             f.write(self.solver.to_solver_prototxt())
 
         # WRITE OR LINK MEAN IMAGE / MEAN PIXEL / INITIAL WEIGHTS
         if self.model.infmt.mean_pixel is not None:
-            np.save(self.workdir + '/mean-pixel.npy', np.array(self.model.infmt.mean_pixel))
+            p = os.path.join(self.workdir, 'mean-pixel.npy')
+            np.save(p, np.array(self.model.infmt.mean_pixel))
 
         if self.model.pretrain is not None:
             os.system('ln -s -r ' + self.model.pretrain + ' ' + self.workdir)
@@ -369,7 +389,8 @@ class Experiment(object):
         raise NotImplementedError()
 
     def save(self):
-        with open(self.workdir + '/' + self.EXP_FILE, 'w') as f:
+        p = os.path.join(self.workdir, self.EXP_FILE)
+        with open(p, 'w') as f:
             pickle.dump(self, f)
 
     @preserve_cwd
@@ -389,10 +410,13 @@ class Experiment(object):
         if os.path.exists(self.LOG_FILE) and not resume:
             os.remove(self.LOG_FILE)
 
-        cmd = ['/opt/caffe/build/tools/caffe', 'train', '-gpu', '0', '-solver', 'solver.prototxt']
+        caff = os.path.join(self.caffe_path, 'bin', 'caffe')
+        cmd = [caff, 'train', '-gpu', '0', '-solver', 'solver.prototxt']
 
         if resume:
-            cmd += ['-snapshot', '{}/snapshot_iter_{}.solverstate'.format(self.SNAPSHOTS_DIR, last_sn)]
+            solver = 'snapshot_iter_{}.solverstate'.format(last_sn)
+            p = os.path.join(self.SNAPSHOTS_DIR, solver)
+            cmd += ['-snapshot', p]
         elif self.model.infmt.pretrain is not None:
             cmd += ['-weights', os.path.basename(self.model.infmt.pretrain)]
 
@@ -440,18 +464,22 @@ class Experiment(object):
 
         # find last snapshot
         p = re.compile('\d+')
-        max_iter = str(max([int(p.findall(sn)[0]) for sn in glob.glob(self.SNAPSHOTS_DIR + '/*.caffemodel')]))
+        max_iter = str(max([int(p.findall(sn)[0]) for sn in glob.glob(os.path.join(self.SNAPSHOTS_DIR, '*.caffemodel'))]))
 
         for t in self.test:
             logging.info('Testing on ' + t.get_name() + ' ...')
             test_file = 'test-' + t.get_name() + '.prototxt'
 
-            with open(self.workdir + '/' + test_file, 'w') as f:
+            p = os.path.join(self.workdir, test_file)
+            with open(p, 'w') as f:
                 net, iters = self.model.to_test_prototxt(t)
                 f.write(str(net))
 
             # TODO python data layer with async blob preparation
-            caffe_cmd = 'caffe test -gpu 0 -model {} -weights snapshots/snapshot_iter_{}.caffemodel -iterations {} 2> test-{}.caffelog'
+            caffe_cmd = os.path.join('caffe test -gpu 0 -model {} -weights snapshots',
+            'snapshot_iter_{}.caffemodel -iterations {} 2> test-{}.caffelog')
+
+
             os.system(caffe_cmd.format(test_file, max_iter, iters, t.get_name()))
 
     # FIXME the recovered snapshot differs.. I think we can blame caffe or the RNG
@@ -522,7 +550,9 @@ class Experiment(object):
                 vname = self.val[i].get_name()
                 aname = "{}-on-{}-val-{}.zip".format(mname, tname, vname)
                 os.system("zip -j {} deploy.prototxt".format(aname, it))
-                os.system("zip -j {} {}/snapshot_iter_{}.caffemodel".format(aname, self.SNAPSHOTS_DIR, it))
+                a = "zip -j {} {}".format(aname, self.SNAPSHOTS_DIR)
+                b = "snapshot_iter_{}.caffemodel".format(it)
+                os.system(os.path.join(a, b))
 
     '''
     TODO DOC.
@@ -548,7 +578,7 @@ class Experiment(object):
         last_iter = log_data['train']['iteration'][-1]
         bs = log_data['meta']['batch_size'][0]
 
-        # list of indices where wanted accuracies for each test are        
+        # list of indices where wanted accuracies for each test are
         if mode is 'maxone':
             it_idx, it_max = self.get_argmax_iters()
             vnames = [v.get_name() for v in self.val]

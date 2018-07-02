@@ -2,7 +2,7 @@ import copy
 import math
 import caffe
 from google.protobuf.text_format import Merge
-
+import os
 
 class Solver(object):
     def __init__(self, **kwargs):
@@ -71,7 +71,7 @@ class Solver(object):
         # looks:
         # self.sp.display = 25
         # self.sp.snapshot = 2500
-        self.sp.snapshot_prefix = "snapshots/snapshot"
+        self.sp.snapshot_prefix = os.path.join("snapshots", "snapshot")
 
         # learning rate policy
         self.sp.lr_policy = "fixed"
